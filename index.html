@@ -81,6 +81,34 @@
       text-transform: uppercase;
     }
 
+    #btn-manage {
+      margin-top: 10px;
+      background: transparent;
+      border: 1px solid rgba(0,112,60,0.45);
+      border-radius: 20px;
+      color: var(--gray);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      padding: 5px 14px;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      transition: color 0.2s, border-color 0.2s;
+    }
+
+    #btn-manage:active,
+    #btn-manage.open { color: var(--white); border-color: var(--gold); }
+
+    /* ── Collapsible manage panel ── */
+    #manage-panel {
+      overflow: hidden;
+      max-height: 0;
+      transition: max-height 0.35s ease;
+    }
+
+    #manage-panel.open { max-height: 500px; }
+
     /* ── Main Layout ── */
     main {
       max-width: 680px;
@@ -464,6 +492,36 @@
 
     .audio-file-input { display: none; }
 
+    /* ── Music Start Timestamp ── */
+    .music-start-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex: 1;
+    }
+
+    .music-start-input {
+      width: 64px;
+      padding: 6px 8px;
+      background: var(--navy3);
+      border: 1px solid rgba(0,112,60,0.4);
+      border-radius: 8px;
+      color: var(--white);
+      font-size: 14px;
+      font-weight: 600;
+      text-align: center;
+      outline: none;
+      -webkit-appearance: none;
+      appearance: none;
+    }
+
+    .music-start-input:focus { border-color: var(--gold); }
+
+    .music-start-hint {
+      font-size: 11px;
+      color: var(--gray);
+    }
+
     /* ── Now Playing Bar ── */
     #now-playing-bar {
       position: fixed;
@@ -603,30 +661,36 @@
     <span class="bolt">🥎</span>
   </div>
   <p class="subtitle">Walk-Up Songs</p>
+  <button id="btn-manage">⚙ Manage Roster</button>
 </header>
 
 <main>
-  <!-- Add Player -->
-  <div class="add-card">
-    <h2>⚾ Add Player</h2>
-    <div class="field-row">
-      <div class="field-group" style="max-width:70px">
-        <label>#</label>
-        <input type="text" id="input-number" placeholder="00" maxlength="3" inputmode="numeric" />
+  <!-- Collapsible manage panel -->
+  <div id="manage-panel">
+    <!-- Add Player -->
+    <div class="add-card">
+      <h2>Add Player</h2>
+      <div class="field-row">
+        <div class="field-group" style="max-width:90px">
+          <label>Player #</label>
+          <input type="text" id="input-number" placeholder="00" maxlength="3" inputmode="numeric" />
+        </div>
+        <div class="field-group">
+          <label>Player Name</label>
+          <input type="text" id="input-name" placeholder="First Last" />
+        </div>
       </div>
-      <div class="field-group">
-        <label>Player Name</label>
-        <input type="text" id="input-name" placeholder="First Last" />
+      <div style="display:flex;justify-content:center;margin-top:12px">
+        <button class="btn-add" id="btn-add-player">+ Add</button>
       </div>
-      <button class="btn-add" id="btn-add-player">+ Add</button>
     </div>
-  </div>
 
-  <!-- Import / Export -->
-  <div class="io-row">
-    <button class="btn-secondary" id="btn-export">⬇ Export Backup</button>
-    <button class="btn-secondary" id="btn-import">⬆ Import Backup</button>
-    <input type="file" id="import-file-input" accept=".zip" style="display:none" />
+    <!-- Import / Export -->
+    <div class="io-row">
+      <button class="btn-secondary" id="btn-export">⬇ Export Backup</button>
+      <button class="btn-secondary" id="btn-import">⬆ Import Backup</button>
+      <input type="file" id="import-file-input" accept=".zip" style="display:none" />
+    </div>
   </div>
 
   <!-- Roster -->
@@ -721,12 +785,24 @@ function txGetAll(store) {
 }
 
 // ═══════════════════════════════════════════════════
+//  Manage panel toggle
+// ═══════════════════════════════════════════════════
+document.getElementById('btn-manage').addEventListener('click', () => {
+  const panel = document.getElementById('manage-panel');
+  const btn   = document.getElementById('btn-manage');
+  const open  = panel.classList.toggle('open');
+  btn.classList.toggle('open', open);
+  btn.textContent = open ? '✕ Close' : '⚙ Manage Roster';
+});
+
+// ═══════════════════════════════════════════════════
 //  State
 // ═══════════════════════════════════════════════════
-let players = [];         // [{id, number, name, announcerKey, musicKey, announcerName, musicName}]
+let players = [];         // [{id, number, name, announcerKey, musicKey, announcerName, musicName, musicStart}]
 let currentAudio = null;  // currently playing Audio object
 let currentPlayerId = null;
 let progressInterval = null;
+let currentClipTimer = null;
 let editingPlayerId = null;
 let sortableInstance = null;
 
@@ -838,6 +914,18 @@ function renderPlayers() {
             <span class="audio-file-name">${escHtml(p.musicName || 'Tap to add walk-up song')}</span>
           </div>
         </div>
+        ${hasMusic ? `
+        <div class="audio-row">
+          <span class="audio-label">⏱ Start</span>
+          <div class="music-start-wrap">
+            <input class="music-start-input" type="text" inputmode="decimal"
+              placeholder="0:00"
+              value="${formatTime(p.musicStart || 0)}"
+              onblur="saveMusicStart('${p.id}', this.value)"
+              onkeydown="if(event.key==='Enter'){this.blur();}" />
+            <span class="music-start-hint">plays for 7 sec</span>
+          </div>
+        </div>` : ''}
       </div>
       ${!isEditing ? `
       <div class="card-footer">
@@ -906,6 +994,7 @@ async function addPlayer() {
     musicKey:      null,
     announcerName: null,
     musicName:     null,
+    musicStart:    0,
     order:         players.length,
   };
 
@@ -980,6 +1069,10 @@ function pickFile(playerId, type) {
 //  Playback
 // ═══════════════════════════════════════════════════
 function stopAll() {
+  if (currentClipTimer) {
+    clearTimeout(currentClipTimer);
+    currentClipTimer = null;
+  }
   if (currentAudio) {
     currentAudio.pause();
     currentAudio.src = '';
@@ -1007,18 +1100,18 @@ async function handlePlay(id) {
   renderPlayers();
   updateNowPlayingBar(p.name, 'Intro…');
 
-  // Play announcer then music
-  await playBlob(p.announcerKey, p.name, 'Intro…');
+  // Play announcer (full), then music clip (startTime → +7 s)
+  await playBlob(p.announcerKey);
   if (currentPlayerId !== id) return;   // stopped mid-way
 
   updateNowPlayingBar(p.name, '🎵 Walk-up Song');
-  await playBlob(p.musicKey, p.name, '🎵 Walk-up Song');
+  await playBlob(p.musicKey, { startTime: p.musicStart || 0, clipDuration: 7 });
   if (currentPlayerId !== id) return;
 
   stopAll();
 }
 
-function playBlob(key, playerName, phase) {
+function playBlob(key, { startTime = 0, clipDuration = null } = {}) {
   return new Promise(async resolve => {
     const blob = await txGet(STORE_AUDIO, key);
     if (!blob) { resolve(); return; }
@@ -1027,27 +1120,51 @@ function playBlob(key, playerName, phase) {
     const audio = new Audio(url);
     currentAudio = audio;
 
+    function cleanup() {
+      if (currentClipTimer) { clearTimeout(currentClipTimer); currentClipTimer = null; }
+      if (progressInterval) { clearInterval(progressInterval); progressInterval = null; }
+      URL.revokeObjectURL(url);
+      resolve();
+    }
+
     audio.addEventListener('canplaythrough', () => {
-      audio.play().catch(() => resolve());
+      audio.volume = 1;
+      if (startTime > 0) audio.currentTime = startTime;
+
+      audio.play().catch(() => cleanup());
+
+      // Stop after clipDuration seconds if specified
+      if (clipDuration !== null) {
+        currentClipTimer = setTimeout(() => {
+          audio.volume = 1;
+          audio.pause();
+          cleanup();
+        }, clipDuration * 1000);
+      }
     }, { once: true });
 
-    audio.addEventListener('ended', () => {
-      URL.revokeObjectURL(url);
-      resolve();
-    }, { once: true });
+    audio.addEventListener('ended', cleanup, { once: true });
+    audio.addEventListener('error', cleanup, { once: true });
 
-    audio.addEventListener('error', () => {
-      URL.revokeObjectURL(url);
-      resolve();
-    }, { once: true });
-
-    // progress bar
+    // Progress bar + fade-out over last 2 s of a clip
+    const FADE_DURATION = 2;
     if (progressInterval) clearInterval(progressInterval);
     progressInterval = setInterval(() => {
-      if (!audio.duration) return;
-      const pct = (audio.currentTime / audio.duration) * 100;
-      document.getElementById('progress-fill').style.width = pct + '%';
-    }, 200);
+      if (clipDuration !== null) {
+        const elapsed = Math.max(0, audio.currentTime - startTime);
+        document.getElementById('progress-fill').style.width =
+          Math.min((elapsed / clipDuration) * 100, 100) + '%';
+
+        const fadeStart = clipDuration - FADE_DURATION;
+        if (elapsed >= fadeStart) {
+          audio.volume = Math.max(0, 1 - (elapsed - fadeStart) / FADE_DURATION);
+        }
+      } else {
+        if (!audio.duration) return;
+        document.getElementById('progress-fill').style.width =
+          (audio.currentTime / audio.duration) * 100 + '%';
+      }
+    }, 50);
 
     audio.load();
   });
@@ -1061,6 +1178,40 @@ function updateNowPlayingBar(name, phase) {
 }
 
 document.getElementById('btn-stop-all').addEventListener('click', stopAll);
+
+// ═══════════════════════════════════════════════════
+//  Music Start Timestamp
+// ═══════════════════════════════════════════════════
+function formatTime(secs) {
+  secs = Math.max(0, secs || 0);
+  const m = Math.floor(secs / 60);
+  const s = Math.floor(secs % 60);
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+function parseTimestamp(val) {
+  val = String(val).trim();
+  if (val.includes(':')) {
+    const [mPart, sPart] = val.split(':');
+    return Math.max(0, (parseInt(mPart, 10) || 0) * 60 + (parseFloat(sPart) || 0));
+  }
+  return Math.max(0, parseFloat(val) || 0);
+}
+
+async function saveMusicStart(id, val) {
+  const p = players.find(x => x.id === id);
+  if (!p) return;
+  const seconds = parseTimestamp(val);
+  p.musicStart = seconds;
+  await txPut(STORE_PLAYERS, p);
+  // Normalize the displayed value without a full re-render
+  const inputs = document.querySelectorAll('.music-start-input');
+  inputs.forEach(input => {
+    if (input.closest('.player-card[data-id="' + id + '"]')) {
+      input.value = formatTime(seconds);
+    }
+  });
+}
 
 // ═══════════════════════════════════════════════════
 //  Edit Player
