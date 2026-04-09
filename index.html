@@ -1038,9 +1038,16 @@ async function deletePlayer(id) {
 function pickFile(playerId, type) {
   const input = document.createElement('input');
   input.type   = 'file';
-  input.accept = 'audio/*';
+  // Explicit extensions alongside audio/* — iOS Safari needs this to enable files
+  input.accept = 'audio/*,.mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,.mp4';
+  input.style.position = 'fixed';
+  input.style.opacity  = '0';
+  input.style.pointerEvents = 'none';
+  // Must be in the DOM for iOS Safari to open the picker with files enabled
+  document.body.appendChild(input);
 
   input.addEventListener('change', async () => {
+    document.body.removeChild(input);
     const file = input.files[0];
     if (!file) return;
 
@@ -1069,6 +1076,14 @@ function pickFile(playerId, type) {
     renderPlayers();
     showToast(`${type === 'announcer' ? 'Announcer' : 'Music'} saved ✓`);
   });
+
+  // Clean up if user cancels without picking (focus returns to window)
+  window.addEventListener('focus', function onFocus() {
+    window.removeEventListener('focus', onFocus);
+    setTimeout(() => {
+      if (document.body.contains(input)) document.body.removeChild(input);
+    }, 500);
+  }, { once: true });
 
   input.click();
 }
