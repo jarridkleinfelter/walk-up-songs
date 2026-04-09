@@ -805,6 +805,14 @@ let progressInterval = null;
 let currentClipTimer = null;
 let editingPlayerId = null;
 let sortableInstance = null;
+let audioCtx = null;      // shared AudioContext for Web Audio fade-out
+
+function getAudioCtx() {
+  if (!audioCtx || audioCtx.state === 'closed') {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  return audioCtx;
+}
 
 // ═══════════════════════════════════════════════════
 //  Toast
@@ -1120,6 +1128,14 @@ function playBlob(key, { startTime = 0, clipDuration = null } = {}) {
     const audio = new Audio(url);
     currentAudio = audio;
 
+    // Route through Web Audio so gain scheduling works on iOS Safari
+    // (iOS ignores audio.volume assignments entirely)
+    const ctx      = getAudioCtx();
+    const source   = ctx.createMediaElementSource(audio);
+    const gainNode = ctx.createGain();
+    source.connect(gainNode);
+    gainNode.connect(ctx.destination);
+
     function cleanup() {
       if (currentClipTimer) { clearTimeout(currentClipTimer); currentClipTimer = null; }
       if (progressInterval) { clearInterval(progressInterval); progressInterval = null; }
@@ -1127,16 +1143,27 @@ function playBlob(key, { startTime = 0, clipDuration = null } = {}) {
       resolve();
     }
 
-    audio.addEventListener('canplaythrough', () => {
-      audio.volume = 1;
+    audio.addEventListener('canplaythrough', async () => {
       if (startTime > 0) audio.currentTime = startTime;
 
-      audio.play().catch(() => cleanup());
+      gainNode.gain.cancelScheduledValues(0);
+      gainNode.gain.setValueAtTime(1, ctx.currentTime);
 
-      // Stop after clipDuration seconds if specified
+      // Schedule fade-out over the last 2 s of the clip
+      if (clipDuration !== null) {
+        const FADE_DURATION = 2;
+        const fadeStart = clipDuration - FADE_DURATION;
+        gainNode.gain.setValueAtTime(1, ctx.currentTime + fadeStart);
+        gainNode.gain.linearRampToValueAtTime(0, ctx.currentTime + clipDuration);
+      }
+
+      try {
+        await ctx.resume();
+        await audio.play();
+      } catch { cleanup(); return; }
+
       if (clipDuration !== null) {
         currentClipTimer = setTimeout(() => {
-          audio.volume = 1;
           audio.pause();
           cleanup();
         }, clipDuration * 1000);
@@ -1146,25 +1173,19 @@ function playBlob(key, { startTime = 0, clipDuration = null } = {}) {
     audio.addEventListener('ended', cleanup, { once: true });
     audio.addEventListener('error', cleanup, { once: true });
 
-    // Progress bar + fade-out over last 2 s of a clip
-    const FADE_DURATION = 2;
+    // Progress bar
     if (progressInterval) clearInterval(progressInterval);
     progressInterval = setInterval(() => {
       if (clipDuration !== null) {
         const elapsed = Math.max(0, audio.currentTime - startTime);
         document.getElementById('progress-fill').style.width =
           Math.min((elapsed / clipDuration) * 100, 100) + '%';
-
-        const fadeStart = clipDuration - FADE_DURATION;
-        if (elapsed >= fadeStart) {
-          audio.volume = Math.max(0, 1 - (elapsed - fadeStart) / FADE_DURATION);
-        }
       } else {
         if (!audio.duration) return;
         document.getElementById('progress-fill').style.width =
           (audio.currentTime / audio.duration) * 100 + '%';
       }
-    }, 50);
+    }, 200);
 
     audio.load();
   });
