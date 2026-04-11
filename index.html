@@ -607,6 +607,50 @@
       transform: translateX(-50%) translateY(0);
     }
 
+    /* ── Settings Row ── */
+    .settings-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--navy2);
+      border: 1px solid #2a2a2a;
+      border-radius: var(--radius);
+      padding: 14px 18px;
+      margin-bottom: 16px;
+      box-shadow: var(--shadow);
+    }
+
+    .settings-row label {
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--gold);
+    }
+
+    .settings-row .settings-hint {
+      font-size: 11px;
+      color: var(--gray);
+      margin-top: 2px;
+    }
+
+    .settings-number-input {
+      width: 72px;
+      padding: 8px 10px;
+      background: var(--navy3);
+      border: 1px solid rgba(0,112,60,0.4);
+      border-radius: 8px;
+      color: var(--white);
+      font-size: 16px;
+      font-weight: 700;
+      text-align: center;
+      outline: none;
+      -webkit-appearance: none;
+      appearance: none;
+    }
+
+    .settings-number-input:focus { border-color: var(--gold); }
+
     /* ── Import / Export ── */
     .io-row {
       display: flex;
@@ -683,6 +727,16 @@
       <div style="display:flex;justify-content:center;margin-top:12px">
         <button class="btn-add" id="btn-add-player">+ Add</button>
       </div>
+    </div>
+
+    <!-- Settings -->
+    <div class="settings-row">
+      <div>
+        <label for="input-music-duration">Music Duration</label>
+        <div class="settings-hint">seconds per player</div>
+      </div>
+      <input type="number" id="input-music-duration" class="settings-number-input"
+        min="1" max="60" step="1" inputmode="numeric" />
     </div>
 
     <!-- Import / Export -->
@@ -785,6 +839,27 @@ function txGetAll(store) {
 }
 
 // ═══════════════════════════════════════════════════
+//  Config — persisted to localStorage
+// ═══════════════════════════════════════════════════
+const CONFIG_KEY = 'walkup_config';
+const config = Object.assign({ musicDuration: 7 }, (() => {
+  try { return JSON.parse(localStorage.getItem(CONFIG_KEY)) || {}; } catch { return {}; }
+})());
+
+function saveConfig() {
+  try { localStorage.setItem(CONFIG_KEY, JSON.stringify(config)); } catch {}
+}
+
+// Wire up the duration input once the DOM is ready
+document.getElementById('input-music-duration').value = config.musicDuration;
+document.getElementById('input-music-duration').addEventListener('change', e => {
+  const val = Math.max(1, Math.min(60, parseInt(e.target.value, 10) || 7));
+  e.target.value  = val;
+  config.musicDuration = val;
+  saveConfig();
+});
+
+// ═══════════════════════════════════════════════════
 //  Manage panel toggle
 // ═══════════════════════════════════════════════════
 document.getElementById('btn-manage').addEventListener('click', () => {
@@ -805,13 +880,68 @@ let progressInterval = null;
 let currentClipTimer = null;
 let editingPlayerId = null;
 let sortableInstance = null;
-let audioCtx = null;      // shared AudioContext for Web Audio fade-out
+let audioCtx    = null;   // shared AudioContext
+let stadiumFX   = null;   // shared stadium effects graph { input }
 
 function getAudioCtx() {
   if (!audioCtx || audioCtx.state === 'closed') {
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    audioCtx  = new (window.AudioContext || window.webkitAudioContext)();
+    stadiumFX = null;     // reset FX graph whenever context is recreated
   }
   return audioCtx;
+}
+
+// Algorithmically generated reverb impulse response — exponential noise decay
+function createReverbIR(ctx) {
+  const duration   = 3.0;
+  const decay      = 2.5;
+  const length     = Math.floor(ctx.sampleRate * duration);
+  const ir         = ctx.createBuffer(2, length, ctx.sampleRate);
+  for (let ch = 0; ch < 2; ch++) {
+    const data = ir.getChannelData(ch);
+    for (let i = 0; i < length; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / length, decay);
+    }
+  }
+  return ir;
+}
+
+// Lazily build: input → [dry | reverb | echo] → destination
+function getStadiumFX(ctx) {
+  if (stadiumFX) return stadiumFX;
+
+  const input = ctx.createGain();   // all playback connects here
+
+  // Dry
+  const dryGain = ctx.createGain();
+  dryGain.gain.value = 0.75;
+  input.connect(dryGain);
+  dryGain.connect(ctx.destination);
+
+  // Reverb
+  const convolver = ctx.createConvolver();
+  convolver.buffer = createReverbIR(ctx);
+  const reverbGain = ctx.createGain();
+  reverbGain.gain.value = 0.2;
+  input.connect(convolver);
+  convolver.connect(reverbGain);
+  reverbGain.connect(ctx.destination);
+
+  // Echo — 380 ms delay with feedback loop
+  const delay = ctx.createDelay(1.0);
+  delay.delayTime.value = 0.38;
+  const feedbackGain = ctx.createGain();
+  feedbackGain.gain.value = 0.15;
+  const echoOutGain = ctx.createGain();
+  echoOutGain.gain.value = 0.125;
+  input.connect(delay);
+  delay.connect(feedbackGain);
+  feedbackGain.connect(delay);    // feedback loop
+  delay.connect(echoOutGain);
+  echoOutGain.connect(ctx.destination);
+
+  stadiumFX = { input };
+  return stadiumFX;
 }
 
 // ═══════════════════════════════════════════════════
@@ -931,7 +1061,7 @@ function renderPlayers() {
               value="${formatTime(p.musicStart || 0)}"
               onblur="saveMusicStart('${p.id}', this.value)"
               onkeydown="if(event.key==='Enter'){this.blur();}" />
-            <span class="music-start-hint">plays for 7 sec</span>
+            <span class="music-start-hint">plays for ${config.musicDuration} sec</span>
           </div>
         </div>` : ''}
       </div>
@@ -1124,17 +1254,17 @@ async function handlePlay(id) {
   updateNowPlayingBar(p.name, 'Intro…');
 
   // Play announcer (full), then music clip (startTime → +7 s)
-  await playBlob(p.announcerKey);
+  await playBlob(p.announcerKey, { deepenVoice: true, volume: 1.5 });
   if (currentPlayerId !== id) return;   // stopped mid-way
 
   updateNowPlayingBar(p.name, '🎵 Walk-up Song');
-  await playBlob(p.musicKey, { startTime: p.musicStart || 0, clipDuration: 7 });
+  await playBlob(p.musicKey, { startTime: p.musicStart || 0, clipDuration: config.musicDuration });
   if (currentPlayerId !== id) return;
 
   stopAll();
 }
 
-function playBlob(key, { startTime = 0, clipDuration = null } = {}) {
+function playBlob(key, { startTime = 0, clipDuration = null, deepenVoice = false, volume = 1.0 } = {}) {
   return new Promise(async resolve => {
     const blob = await txGet(STORE_AUDIO, key);
     if (!blob) { resolve(); return; }
@@ -1148,8 +1278,26 @@ function playBlob(key, { startTime = 0, clipDuration = null } = {}) {
     const ctx      = getAudioCtx();
     const source   = ctx.createMediaElementSource(audio);
     const gainNode = ctx.createGain();
-    source.connect(gainNode);
-    gainNode.connect(ctx.destination);
+
+    if (deepenVoice) {
+      // Low shelf: +5 dB at 200 Hz — adds body and warmth
+      const lowShelf = ctx.createBiquadFilter();
+      lowShelf.type           = 'lowshelf';
+      lowShelf.frequency.value = 200;
+      lowShelf.gain.value      = 5;
+      // High shelf: -5 dB at 3500 Hz — rolls off brightness/harshness
+      const highShelf = ctx.createBiquadFilter();
+      highShelf.type           = 'highshelf';
+      highShelf.frequency.value = 3500;
+      highShelf.gain.value      = -5;
+      source.connect(lowShelf);
+      lowShelf.connect(highShelf);
+      highShelf.connect(gainNode);
+    } else {
+      source.connect(gainNode);
+    }
+
+    gainNode.connect(getStadiumFX(ctx).input);
 
     function cleanup() {
       if (currentClipTimer) { clearTimeout(currentClipTimer); currentClipTimer = null; }
@@ -1162,13 +1310,13 @@ function playBlob(key, { startTime = 0, clipDuration = null } = {}) {
       if (startTime > 0) audio.currentTime = startTime;
 
       gainNode.gain.cancelScheduledValues(0);
-      gainNode.gain.setValueAtTime(1, ctx.currentTime);
+      gainNode.gain.setValueAtTime(volume, ctx.currentTime);
 
       // Schedule fade-out over the last 2 s of the clip
       if (clipDuration !== null) {
         const FADE_DURATION = 2;
         const fadeStart = clipDuration - FADE_DURATION;
-        gainNode.gain.setValueAtTime(1, ctx.currentTime + fadeStart);
+        gainNode.gain.setValueAtTime(volume, ctx.currentTime + fadeStart);
         gainNode.gain.linearRampToValueAtTime(0, ctx.currentTime + clipDuration);
       }
 
