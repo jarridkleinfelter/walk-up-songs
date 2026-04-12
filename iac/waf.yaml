@@ -1,0 +1,60 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Walk-Up Songs — WAF WebACL with IP rate limiting on the /api/* path.
+  IMPORTANT: This stack MUST be deployed to us-east-1 regardless of where
+  the rest of your infrastructure lives. CloudFront only accepts WAF ACLs
+  from us-east-1.
+
+Parameters:
+  ProjectTag:
+    Type: String
+    Default: walk-up-songs
+    Description: Short identifier used to name and tag resources.
+
+Resources:
+
+  WebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub '${ProjectTag}-acl'
+      Scope: CLOUDFRONT
+      DefaultAction:
+        Allow: {}
+      Rules:
+        # Rate-limit the /api/* path to 100 requests per IP per 5 minutes.
+        # This is the WAFv2 minimum and protects against Lambda/S3 cost abuse.
+        - Name: ApiIPRateLimit
+          Priority: 0
+          Statement:
+            RateBasedStatement:
+              Limit: 100
+              AggregateKeyType: IP
+              EvaluationWindowSec: 300
+              # Only count requests that start with /api/ so static-asset
+              # traffic is not penalised.
+              ScopeDownStatement:
+                ByteMatchStatement:
+                  FieldToMatch:
+                    UriPath: {}
+                  PositionalConstraint: STARTS_WITH
+                  SearchString: /api/
+                  TextTransformations:
+                    - Priority: 0
+                      Type: NONE
+          Action:
+            Block: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub '${ProjectTag}-api-rate-limit'
+      VisibilityConfig:
+        SampledRequestsEnabled: false
+        CloudWatchMetricsEnabled: false
+        MetricName: !Sub '${ProjectTag}-web-acl'
+
+Outputs:
+  WebACLArn:
+    Description: ARN of the WAF WebACL — pass this to the main stack as WafAclArn.
+    Value: !GetAtt WebACL.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-WebACLArn'

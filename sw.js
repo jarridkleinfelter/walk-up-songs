@@ -1,4 +1,7 @@
 // Service Worker — KML Chargers Walk-Up Songs
+// CACHE version is replaced with a UTC timestamp by the GitHub Actions
+// deploy workflow on every push. Format: walkup-YYYYMMDDTHHMMSSZ
+// Do not edit this line manually — the sed pattern matches it exactly.
 const CACHE = 'walkup-v1';
 const ASSETS = ['/index.html', '/'];
 

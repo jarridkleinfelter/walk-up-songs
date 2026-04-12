@@ -651,32 +651,120 @@
 
     .settings-number-input:focus { border-color: var(--gold); }
 
-    /* ── Import / Export ── */
-    .io-row {
-      display: flex;
-      gap: 10px;
-      margin-bottom: 24px;
+    /* ── Cloud Backup Card ── */
+    .cloud-card {
+      background: var(--navy2);
+      border: 1px solid #2a2a2a;
+      border-radius: var(--radius);
+      padding: 18px;
+      margin-bottom: 16px;
+      box-shadow: var(--shadow);
     }
 
-    .btn-secondary {
-      background: transparent;
-      color: var(--gold);
-      border: 1px solid rgba(0,112,60,0.5);
-      border-radius: 8px;
-      padding: 9px 16px;
-      font-size: 12px;
+    .cloud-card h2 {
+      font-size: 13px;
       font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: var(--gold);
+      margin-bottom: 14px;
+    }
+
+    .cloud-section {
+      margin-bottom: 14px;
+    }
+
+    .cloud-section:last-child { margin-bottom: 0; }
+
+    .cloud-label {
+      display: block;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--gray);
+      margin-bottom: 6px;
+    }
+
+    .cloud-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .cloud-input {
+      flex: 1;
+      padding: 9px 12px;
+      background: var(--navy3);
+      border: 1px solid rgba(0,112,60,0.3);
+      border-radius: 8px;
+      color: var(--white);
+      font-size: 14px;
+      outline: none;
+      -webkit-appearance: none;
+      appearance: none;
+      min-width: 0;
+    }
+
+    .cloud-input:focus { border-color: var(--gold); }
+    .cloud-input::placeholder { color: var(--gray); }
+
+    .cloud-select {
+      flex: 1;
+      padding: 9px 10px;
+      background: var(--navy3);
+      border: 1px solid rgba(0,112,60,0.3);
+      border-radius: 8px;
+      color: var(--white);
+      font-size: 13px;
+      outline: none;
+      -webkit-appearance: none;
+      appearance: none;
+      min-width: 0;
+      cursor: pointer;
+    }
+
+    .cloud-select:focus { border-color: var(--gold); }
+
+    .btn-secondary {
+      background: linear-gradient(135deg, var(--gold) 0%, var(--gold2) 100%);
+      color: var(--white);
+      border: none;
+      border-radius: 8px;
+      padding: 9px 14px;
+      font-size: 12px;
+      font-weight: 800;
       text-transform: uppercase;
       letter-spacing: 1px;
       cursor: pointer;
       white-space: nowrap;
-      transition: all 0.2s;
+      transition: transform 0.1s;
       -webkit-tap-highlight-color: transparent;
-      flex: 1;
+      flex-shrink: 0;
     }
 
-    .btn-secondary:active { background: rgba(0,112,60,0.15); }
-    .btn-secondary:disabled { opacity: 0.4; cursor: default; }
+    .btn-secondary:active { transform: scale(0.96); }
+    .btn-secondary:disabled { opacity: 0.4; cursor: default; transform: none; }
+
+    .btn-icon {
+      width: 36px;
+      height: 36px;
+      flex-shrink: 0;
+      background: transparent;
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 8px;
+      color: var(--gray);
+      font-size: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      transition: all 0.2s;
+    }
+
+    .btn-icon:active { background: rgba(255,255,255,0.08); color: var(--white); }
+    .btn-icon:disabled { opacity: 0.4; cursor: default; }
 
     /* ── Progress bar ── */
     .progress-bar-wrap {
@@ -739,11 +827,29 @@
         min="1" max="60" step="1" inputmode="numeric" />
     </div>
 
-    <!-- Import / Export -->
-    <div class="io-row">
-      <button class="btn-secondary" id="btn-export">⬇ Export Backup</button>
-      <button class="btn-secondary" id="btn-import">⬆ Import Backup</button>
-      <input type="file" id="import-file-input" accept=".zip" style="display:none" />
+    <!-- Cloud Backup -->
+    <div class="cloud-card">
+      <h2>☁ Cloud Backup</h2>
+
+      <div class="cloud-section">
+        <label class="cloud-label" for="input-backup-name">Save Backup</label>
+        <div class="cloud-row">
+          <input type="text" id="input-backup-name" class="cloud-input"
+            placeholder="my-backup" maxlength="60" />
+          <button class="btn-secondary" id="btn-cloud-export">⬆ Save</button>
+        </div>
+      </div>
+
+      <div class="cloud-section">
+        <label class="cloud-label" for="select-backup">Load Backup</label>
+        <div class="cloud-row">
+          <select id="select-backup" class="cloud-select">
+            <option value="">— tap ↺ to load list —</option>
+          </select>
+          <button class="btn-icon" id="btn-refresh-backups" title="Refresh list">↺</button>
+          <button class="btn-secondary" id="btn-cloud-import">⬇ Load</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -1432,29 +1538,60 @@ async function saveEdit(id) {
 }
 
 // ═══════════════════════════════════════════════════
-//  Import / Export
+//  Cloud Backup (S3 via presigned URLs)
 // ═══════════════════════════════════════════════════
-document.getElementById('btn-export').addEventListener('click', exportData);
-document.getElementById('btn-import').addEventListener('click', () => {
-  document.getElementById('import-file-input').click();
-});
-document.getElementById('import-file-input').addEventListener('change', async e => {
-  const file = e.target.files[0];
-  e.target.value = '';
-  if (file) await importData(file);
-});
+document.getElementById('btn-cloud-export').addEventListener('click', exportData);
+document.getElementById('btn-cloud-import').addEventListener('click', importData);
+document.getElementById('btn-refresh-backups').addEventListener('click', loadBackupList);
+
+function formatFileSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1048576).toFixed(1)} MB`;
+}
+
+async function loadBackupList() {
+  const btn = document.getElementById('btn-refresh-backups');
+  const sel = document.getElementById('select-backup');
+  btn.disabled = true;
+  sel.innerHTML = '<option value="">Loading…</option>';
+  try {
+    const res = await fetch('/api/presign/list');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const files = await res.json();
+    if (files.length === 0) {
+      sel.innerHTML = '<option value="">No backups found</option>';
+    } else {
+      sel.innerHTML = files.map(f =>
+        `<option value="${escHtml(f.key)}">${escHtml(f.key)} — ${formatFileSize(f.size)}</option>`
+      ).join('');
+    }
+  } catch (err) {
+    console.error('List error:', err);
+    sel.innerHTML = '<option value="">Failed to load — check connection</option>';
+    showToast('Could not load backup list');
+  } finally {
+    btn.disabled = false;
+  }
+}
 
 async function exportData() {
   if (players.length === 0) { showToast('No roster to export'); return; }
 
-  const btn = document.getElementById('btn-export');
+  const nameInput = document.getElementById('input-backup-name');
+  const rawName   = nameInput.value.trim() || `backup-${new Date().toISOString().slice(0, 10)}`;
+  // Sanitise to safe S3 key characters
+  const safeName  = rawName.replace(/[^a-zA-Z0-9_-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+  const filename  = `${safeName || 'backup'}.zip`;
+
+  const btn = document.getElementById('btn-cloud-export');
   btn.disabled = true;
-  showToast('Preparing export…');
+  showToast('Preparing backup…');
 
   try {
+    // 1. Build the zip in memory
     const zip = new JSZip();
     zip.file('players.json', JSON.stringify(players, null, 2));
-
     const audioFolder = zip.folder('audio');
     for (const p of players) {
       for (const [, key] of [['announcer', p.announcerKey], ['music', p.musicKey]]) {
@@ -1464,64 +1601,82 @@ async function exportData() {
         }
       }
     }
+    const zipBlob = await zip.generateAsync({ type: 'blob' });
 
-    const content = await zip.generateAsync({ type: 'blob' });
-    const url = URL.createObjectURL(content);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `walkup-songs-${new Date().toISOString().slice(0, 10)}.zip`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    showToast('Export complete ✓');
+    // 2. Get a presigned PUT URL from the Lambda
+    showToast('Uploading to cloud…');
+    const presignRes = await fetch(`/api/presign/upload?filename=${encodeURIComponent(filename)}`);
+    if (!presignRes.ok) throw new Error(`Presign HTTP ${presignRes.status}`);
+    const { url: putUrl, filename: finalFilename } = await presignRes.json();
+
+    // 3. PUT the zip directly to S3
+    const uploadRes = await fetch(putUrl, {
+      method: 'PUT',
+      body: zipBlob,
+      headers: { 'Content-Type': 'application/zip' },
+    });
+    if (!uploadRes.ok) throw new Error(`S3 upload HTTP ${uploadRes.status}`);
+
+    nameInput.value = '';
+    showToast(`Saved "${finalFilename}" ✓`);
+    await loadBackupList();   // refresh the import dropdown
   } catch (err) {
     console.error('Export error:', err);
-    showToast('Export failed');
+    showToast('Backup failed — check connection');
   } finally {
     btn.disabled = false;
   }
 }
 
-async function importData(file) {
-  if (!confirm('This will replace ALL current roster data and audio. Continue?')) return;
+async function importData() {
+  const sel      = document.getElementById('select-backup');
+  const filename = sel.value;
+  if (!filename) { showToast('Select a backup first, then tap ↺ to load the list'); return; }
 
-  const btn = document.getElementById('btn-import');
+  if (!confirm(`Replace ALL current roster data with "${filename}"? This cannot be undone.`)) return;
+
+  const btn = document.getElementById('btn-cloud-import');
   btn.disabled = true;
-  showToast('Importing…');
+  showToast('Downloading backup…');
 
   try {
-    const zip = await JSZip.loadAsync(file);
+    // 1. Get a presigned GET URL from the Lambda
+    const presignRes = await fetch(`/api/presign/download?filename=${encodeURIComponent(filename)}`);
+    if (!presignRes.ok) throw new Error(`Presign HTTP ${presignRes.status}`);
+    const { url: getUrl } = await presignRes.json();
 
+    // 2. Download the zip directly from S3
+    const dlRes = await fetch(getUrl);
+    if (!dlRes.ok) throw new Error(`S3 download HTTP ${dlRes.status}`);
+    const zipBlob = await dlRes.blob();
+
+    // 3. Restore from zip
+    const zip = await JSZip.loadAsync(zipBlob);
     const playersFile = zip.file('players.json');
-    if (!playersFile) { showToast('Invalid backup — missing players.json'); btn.disabled = false; return; }
+    if (!playersFile) { showToast('Invalid backup — missing players.json'); return; }
 
     const importedPlayers = JSON.parse(await playersFile.async('string'));
     if (!Array.isArray(importedPlayers)) throw new Error('players.json is not an array');
 
     stopAll();
 
-    // Clear existing data
     for (const p of [...players]) {
       if (p.announcerKey) await txDelete(STORE_AUDIO, p.announcerKey).catch(() => {});
       if (p.musicKey)     await txDelete(STORE_AUDIO, p.musicKey).catch(() => {});
       await txDelete(STORE_PLAYERS, p.id).catch(() => {});
     }
 
-    // Restore audio blobs
     const audioFiles = Object.values(zip.files).filter(f => f.name.startsWith('audio/') && !f.dir);
     for (const zipFile of audioFiles) {
       const blob = await zipFile.async('blob');
-      const key = zipFile.name.slice('audio/'.length);
+      const key  = zipFile.name.slice('audio/'.length);
       if (key) await txPut(STORE_AUDIO, blob, key);
     }
 
-    // Restore players
     for (const player of importedPlayers) {
       await txPut(STORE_PLAYERS, player);
     }
 
-    // Reload state
     const saved = await txGetAll(STORE_PLAYERS);
     saved.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     players = saved;
@@ -1529,7 +1684,7 @@ async function importData(file) {
     showToast(`Imported ${players.length} player${players.length !== 1 ? 's' : ''} ✓`);
   } catch (err) {
     console.error('Import error:', err);
-    showToast('Import failed — invalid file');
+    showToast('Import failed — check connection');
   } finally {
     btn.disabled = false;
   }

@@ -1,0 +1,413 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Walk-Up Songs — Core infrastructure.
+  Creates:
+    - S3 website bucket (serves the single-page app)
+    - S3 audio bucket  (stores zip exports; lifecycle to IA → Glacier IR)
+    - CloudFront distribution with three origins:
+        1. /* (default)  → website S3 bucket
+        2. /api/*        → Lambda Function URL (presigned-URL generator)
+        3. /audio/*      → audio S3 bucket
+    - Lambda function + Function URL for presigned URL generation
+    - OAC for each S3 origin
+    - WAF WebACL attached (deployed from waf.yaml, passed as parameter)
+
+  NOTE: Deploy waf.yaml first (in us-east-1) then pass its output
+  WebACLArn to this stack as the WafAclArn parameter.
+  This stack can be deployed to any region; CloudFront is global.
+
+Parameters:
+
+  CloudFrontSecret:
+    Type: String
+    NoEcho: true
+    Description: >
+      A secret string (e.g. a random UUID) added by CloudFront as the
+      X-CloudFront-Secret header on every request to the Lambda origin.
+      The Lambda rejects requests that are missing this header, ensuring
+      it can only be reached via CloudFront and not directly.
+      Generate with: python3 -c "import uuid; print(uuid.uuid4())"
+
+  WafAclArn:
+    Type: String
+    Description: >
+      ARN of the WAFv2 WebACL created by waf.yaml (must be in us-east-1).
+      Found in the Outputs tab of the waf stack.
+
+  ProjectTag:
+    Type: String
+    Default: walk-up-songs
+    Description: Short identifier used to name and tag resources.
+
+Resources:
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # S3 — Website bucket (app shell: index.html, sw.js, manifest.json)
+  # ─────────────────────────────────────────────────────────────────────────
+
+  WebsiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::AccountId}-${ProjectTag}-website'
+      # Block all direct public access — CloudFront uses OAC exclusively.
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectTag
+
+  WebsiteOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${AWS::AccountId}-${ProjectTag}-website-oac'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  WebsiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebsiteBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontOAC
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub 'arn:aws:s3:::${WebsiteBucket}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}'
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # S3 — Audio bucket (zip backup exports)
+  # Storage strategy:
+  #   0–30 days  : S3 Standard       (frequent access during active season)
+  #   30–90 days : S3 Standard-IA    (infrequent access, ~40 % cost saving)
+  #   90+ days   : Glacier Instant Retrieval (rarely accessed, ~68 % vs IA,
+  #                                           still millisecond retrieval)
+  # ─────────────────────────────────────────────────────────────────────────
+
+  AudioBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::AccountId}-${ProjectTag}-audio'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: AudioExportTiering
+            Status: Enabled
+            Transitions:
+              - TransitionInDays: 30
+                StorageClass: STANDARD_IA
+              - TransitionInDays: 90
+                StorageClass: GLACIER_IR
+            # Uncomment the following to automatically delete exports after
+            # 365 days and free up storage entirely:
+            # ExpirationInDays: 365
+      # CORS is required so the browser can PUT directly to S3 via presigned URL.
+      # After the first deployment you can restrict AllowedOrigins to the exact
+      # CloudFront domain (found in the Outputs tab of this stack).
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ['*']
+            AllowedMethods: [GET, PUT]
+            AllowedOrigins: ['*']
+            MaxAgeSeconds: 3600
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectTag
+
+  AudioOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${AWS::AccountId}-${ProjectTag}-audio-oac'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  AudioBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AudioBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          # Allow CloudFront to serve audio exports through the /audio/* path.
+          - Sid: AllowCloudFrontOAC
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub 'arn:aws:s3:::${AudioBucket}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}'
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Lambda — Presigned URL generator
+  # Runtime: Python 3.12 (boto3 included in managed runtime — no bundling needed)
+  # ─────────────────────────────────────────────────────────────────────────
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectTag}-presign-lambda-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: AudioBucketAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: !GetAtt AudioBucket.Arn
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub '${AudioBucket.Arn}/*'
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectTag
+
+  PresignFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectTag}-presign'
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 10
+      MemorySize: 128
+      Environment:
+        Variables:
+          AUDIO_BUCKET: !Ref AudioBucket
+          CLOUDFRONT_SECRET: !Ref CloudFrontSecret
+      Code:
+        # boto3 is provided by the Python 3.12 managed Lambda runtime —
+        # no deployment package required.
+        ZipFile: |
+          import json, boto3, os
+          s3 = boto3.client('s3')
+          BUCKET = os.environ['AUDIO_BUCKET']
+          SECRET = os.environ['CLOUDFRONT_SECRET']
+
+          def resp(code, body):
+              return {
+                  'statusCode': code,
+                  'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                  'body': json.dumps(body)
+              }
+
+          def handler(event, context):
+              headers = {k.lower(): v for k, v in (event.get('headers') or {}).items()}
+              if headers.get('x-cloudfront-secret') != SECRET:
+                  return {'statusCode': 403, 'body': 'Forbidden'}
+
+              path = event.get('rawPath', '/')
+              qs   = event.get('queryStringParameters') or {}
+
+              if path.endswith('/list'):
+                  result = s3.list_objects_v2(Bucket=BUCKET)
+                  files  = [
+                      {'key': o['Key'], 'size': o['Size'], 'lastModified': o['LastModified'].isoformat()}
+                      for o in result.get('Contents', [])
+                  ]
+                  return resp(200, sorted(files, key=lambda f: f['lastModified'], reverse=True))
+
+              if path.endswith('/upload'):
+                  filename = qs.get('filename', '').strip()
+                  if not filename:
+                      return resp(400, {'error': 'Missing filename'})
+                  url = s3.generate_presigned_url(
+                      'put_object',
+                      Params={'Bucket': BUCKET, 'Key': filename, 'ContentType': 'application/zip'},
+                      ExpiresIn=300
+                  )
+                  return resp(200, {'url': url})
+
+              if path.endswith('/download'):
+                  filename = qs.get('filename', '').strip()
+                  if not filename:
+                      return resp(400, {'error': 'Missing filename'})
+                  url = s3.generate_presigned_url(
+                      'get_object',
+                      Params={'Bucket': BUCKET, 'Key': filename},
+                      ExpiresIn=1800
+                  )
+                  return resp(200, {'url': url})
+
+              return {'statusCode': 404, 'body': 'Not found'}
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectTag
+
+  PresignFunctionUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      AuthType: NONE
+      # CORS is not strictly needed here because the browser calls CloudFront
+      # (/api/*) not the Function URL directly. Configured for dev convenience.
+      Cors:
+        AllowOrigins: ['*']
+        AllowMethods: [GET, OPTIONS]
+        AllowHeaders: ['*']
+        MaxAge: 300
+      TargetFunctionArn: !GetAtt PresignFunction.Arn
+
+  # Allow unauthenticated invocations via the Function URL
+  # (the X-CloudFront-Secret header provides the actual security layer).
+  PresignFunctionUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt PresignFunction.Arn
+      Action: lambda:InvokeFunctionUrl
+      Principal: '*'
+      FunctionUrlAuthType: NONE
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # CloudFront Distribution
+  # Origins:
+  #   1. WebsiteBucketOrigin   — default (/*) — serves app shell
+  #   2. LambdaOrigin          — /api/*       — presigned URL API
+  #   3. AudioBucketOrigin     — /audio/*     — serves zip exports via CDN
+  # ─────────────────────────────────────────────────────────────────────────
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub '${ProjectTag} walk-up songs app'
+        DefaultRootObject: index.html
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        WebACLId: !Ref WafAclArn
+
+        Origins:
+          # Origin 1 — App shell (S3 website bucket, OAC)
+          - Id: WebsiteBucketOrigin
+            DomainName: !GetAtt WebsiteBucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: ''   # required field even with OAC; leave empty
+            OriginAccessControlId: !Ref WebsiteOAC
+
+          # Origin 2 — Presign Lambda (Function URL)
+          # Extract hostname from https://xxx.lambda-url.region.on.aws/
+          - Id: LambdaOrigin
+            DomainName: !Select [2, !Split ['/', !GetAtt PresignFunctionUrl.FunctionUrl]]
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols: [TLSv1.2]
+            OriginCustomHeaders:
+              # CloudFront injects this secret on every request to the Lambda.
+              # The Lambda rejects anything that doesn't carry it.
+              - HeaderName: X-CloudFront-Secret
+                HeaderValue: !Ref CloudFrontSecret
+
+          # Origin 3 — Audio exports bucket (S3, OAC)
+          - Id: AudioBucketOrigin
+            DomainName: !GetAtt AudioBucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+            OriginAccessControlId: !Ref AudioOAC
+
+        CacheBehaviors:
+          # /api/* → Lambda (no caching, forward all query strings and headers)
+          - PathPattern: /api/*
+            TargetOriginId: LambdaOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            # CachingDisabled managed policy
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            # AllViewerExceptHostHeader — forwards query strings + headers
+            # (host header excluded so Lambda sees its own domain, not CloudFront's)
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+            AllowedMethods: [DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT]
+            CachedMethods: [GET, HEAD]
+            Compress: false
+
+          # /audio/* → Audio S3 bucket (cache aggressively; exports are immutable)
+          - PathPattern: /audio/*
+            TargetOriginId: AudioBucketOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            # CachingOptimized managed policy
+            CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+            AllowedMethods: [GET, HEAD, OPTIONS]
+            CachedMethods: [GET, HEAD]
+            Compress: true
+
+        # Default — Website S3 bucket
+        DefaultCacheBehavior:
+          TargetOriginId: WebsiteBucketOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          # CachingOptimized managed policy
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+
+        # Return index.html on 403/404 (SPA routing + S3 access-denied fallback)
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 10
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 10
+
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectTag
+
+Outputs:
+
+  WebsiteBucketName:
+    Description: S3 bucket that holds the app shell files.
+    Value: !Ref WebsiteBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-WebsiteBucketName'
+
+  AudioBucketName:
+    Description: S3 bucket that holds zip backup exports.
+    Value: !Ref AudioBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-AudioBucketName'
+
+  CloudFrontDistributionId:
+    Description: CloudFront distribution ID — needed for cache invalidations.
+    Value: !Ref CloudFrontDistribution
+    Export:
+      Name: !Sub '${AWS::StackName}-CloudFrontDistributionId'
+
+  CloudFrontURL:
+    Description: Public URL of the app (use this as your bookmark / PWA URL).
+    Value: !Sub 'https://${CloudFrontDistribution.DomainName}'
+    Export:
+      Name: !Sub '${AWS::StackName}-CloudFrontURL'
+
+  LambdaFunctionUrl:
+    Description: Direct Lambda Function URL (for debugging; protected by secret header).
+    Value: !GetAtt PresignFunctionUrl.FunctionUrl

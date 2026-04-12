@@ -1,0 +1,101 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Walk-Up Songs — GitHub Actions OIDC role.
+  Grants the CI/CD workflow least-privilege access to:
+    - Sync app-shell files to the website S3 bucket
+    - Invalidate the CloudFront distribution cache
+  Deploy this stack AFTER main.yaml (it takes CloudFront and S3 outputs
+  as parameters).
+
+Parameters:
+
+  GitHubOrg:
+    Type: String
+    Description: Your GitHub username or organisation (e.g. "myusername").
+
+  GitHubRepo:
+    Type: String
+    Description: Repository name (e.g. "walk-up-songs").
+
+  WebsiteBucketName:
+    Type: String
+    Description: >
+      Name of the website S3 bucket — copy from the WebsiteBucketName output
+      of the main stack.
+
+  CloudFrontDistributionId:
+    Type: String
+    Description: >
+      CloudFront distribution ID — copy from the CloudFrontDistributionId
+      output of the main stack.
+
+  ProjectTag:
+    Type: String
+    Default: walk-up-songs
+
+Resources:
+
+  # OIDC provider for GitHub Actions token exchange.
+  # NOTE: Only one provider per issuer URL is allowed per AWS account.
+  # If you already have a GitHub OIDC provider in this account
+  # (e.g. from another project), remove this resource and point
+  # the role's trust policy at the existing one.
+  GitHubOIDCProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+
+  GitHubActionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectTag}-github-actions'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref GitHubOIDCProvider
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                'token.actions.githubusercontent.com:aud': sts.amazonaws.com
+              StringLike:
+                'token.actions.githubusercontent.com:sub': !Sub 'repo:${GitHubOrg}/${GitHubRepo}:*'
+      Policies:
+        - PolicyName: S3DeployPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub 'arn:aws:s3:::${WebsiteBucketName}/*'
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: !Sub 'arn:aws:s3:::${WebsiteBucketName}'
+        - PolicyName: CloudFrontInvalidationPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudfront:CreateInvalidation
+                Resource: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistributionId}'
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectTag
+
+Outputs:
+  RoleArn:
+    Description: >
+      ARN of the GitHub Actions IAM role.
+      Add this as the AWS_ROLE_ARN secret in your GitHub repository settings.
+    Value: !GetAtt GitHubActionsRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-RoleArn'
