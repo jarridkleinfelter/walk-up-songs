@@ -925,7 +925,7 @@
         <div class="cloud-row">
           <input type="text" id="input-backup-name" class="cloud-input"
             placeholder="my-backup" maxlength="60" />
-          <button class="btn-secondary" id="btn-cloud-export">⬆ Save</button>
+          <button class="btn-secondary" id="btn-cloud-export">Save</button>
         </div>
       </div>
 
@@ -933,10 +933,9 @@
         <label class="cloud-label" for="select-backup">Load Backup</label>
         <div class="cloud-row">
           <select id="select-backup" class="cloud-select">
-            <option value="">— tap ↺ to load list —</option>
+            <option value="">Loading…</option>
           </select>
-          <button class="btn-icon" id="btn-refresh-backups" title="Refresh list">↺</button>
-          <button class="btn-secondary" id="btn-cloud-import">⬇ Load</button>
+          <button class="btn-secondary" id="btn-cloud-import">Load</button>
         </div>
       </div>
     </div>
@@ -1660,7 +1659,6 @@ async function saveEdit(id) {
 // ═══════════════════════════════════════════════════
 document.getElementById('btn-cloud-export').addEventListener('click', exportData);
 document.getElementById('btn-cloud-import').addEventListener('click', importData);
-document.getElementById('btn-refresh-backups').addEventListener('click', loadBackupList);
 
 function formatFileSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
@@ -1669,9 +1667,7 @@ function formatFileSize(bytes) {
 }
 
 async function loadBackupList() {
-  const btn = document.getElementById('btn-refresh-backups');
   const sel = document.getElementById('select-backup');
-  btn.disabled = true;
   sel.innerHTML = '<option value="">Loading…</option>';
   try {
     const res = await fetch('/api/presign/list');
@@ -1687,9 +1683,6 @@ async function loadBackupList() {
   } catch (err) {
     console.error('List error:', err);
     sel.innerHTML = '<option value="">Failed to load — check connection</option>';
-    showToast('Could not load backup list');
-  } finally {
-    btn.disabled = false;
   }
 }
 
@@ -1862,10 +1855,10 @@ document.addEventListener('touchend', function unlock() {
 (async () => {
   db = await openDB();
   const saved = await txGetAll(STORE_PLAYERS);
-  // Sort by order field
   saved.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   players = saved;
   renderPlayers();
+  loadBackupList();
 })();
 </script>
 
