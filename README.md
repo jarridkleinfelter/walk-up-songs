@@ -106,7 +106,7 @@ flowchart TB
 
 - **OAC everywhere** — Both S3 buckets block all public access and are reachable only via CloudFront using Origin Access Control signed with SigV4.
 - **Shared-secret Lambda auth** — The presign Lambda's Function URL is `AuthType: NONE`, but CloudFront injects a secret header (`X-CloudFront-Secret`) on every request. The Lambda returns `403` for anything without it, which closes the "anyone-with-the-URL can call it" hole.
-- **WAF must live in us-east-1** — CloudFront only accepts WAFv2 ACLs scoped to `CLOUDFRONT`, which are always in us-east-1. The rest of the stack can run in any region.
+- **Whole stack deploys to us-east-1** — CloudFront only accepts WAFv2 ACLs scoped to `CLOUDFRONT`, which are always in us-east-1. The WebACL lives in the same stack as the distribution, so the whole stack targets that region. CloudFront itself is global.
 - **Lifecycle tiering for audio bucket** — Backups transition to Standard-IA at 30 days and Glacier Instant Retrieval at 90 days to keep storage costs low while preserving millisecond retrieval.
 - **SPA fallback** — CloudFront rewrites 403 and 404 responses to `/index.html` with a 200, so deep links and S3 access-denied responses still load the app.
 
@@ -120,8 +120,7 @@ sw.js                         — Service Worker (offline caching + cache-versio
 manifest.json                 — PWA web app manifest
 
 iac/
-  waf.yaml                    — WAFv2 WebACL (deploy FIRST, to us-east-1)
-  main.yaml                   — S3 buckets, CloudFront, presign Lambda, OAC
+  main.yaml                   — WAFv2 WebACL, S3 buckets, CloudFront, presign Lambda, OAC (us-east-1)
   ghrole.yaml                 — GitHub Actions OIDC role (deploy LAST)
 
 lambda/
@@ -142,20 +141,9 @@ No build system, no npm, no dependencies to install for the app itself. Everythi
 
 ## Deploying to AWS
 
-Deploy the three CloudFormation stacks in order. All commands assume the AWS CLI is configured with an admin-level profile.
+Deploy the two CloudFormation stacks in order. All commands assume the AWS CLI is configured with an admin-level profile. **Both stacks must be deployed to `us-east-1`** — CloudFront-scoped WAFv2 ACLs only exist there, and the stack co-locates the WebACL with the distribution.
 
-### 1. WAF (us-east-1)
-
-```bash
-aws cloudformation deploy \
-  --stack-name walk-up-songs-waf \
-  --template-file iac/waf.yaml \
-  --region us-east-1
-```
-
-Copy the `WebACLArn` output.
-
-### 2. Main stack (any region)
+### 1. Main stack (us-east-1)
 
 Generate a random secret that CloudFront and the Lambda will share:
 
@@ -167,37 +155,38 @@ SECRET=$(python3 -c "import uuid; print(uuid.uuid4())")
 aws cloudformation deploy \
   --stack-name walk-up-songs-main \
   --template-file iac/main.yaml \
+  --region us-east-1 \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameter-overrides \
-      CloudFrontSecret=$SECRET \
-      WafAclArn=<paste WebACLArn from step 1>
+      CloudFrontSecret=$SECRET
 ```
 
 Copy the `WebsiteBucketName`, `CloudFrontDistributionId`, and `CloudFrontURL` outputs.
 
-### 3. GitHub Actions role
+### 2. GitHub Actions role
 
 ```bash
 aws cloudformation deploy \
   --stack-name walk-up-songs-ghrole \
   --template-file iac/ghrole.yaml \
+  --region us-east-1 \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameter-overrides \
       GitHubOrg=<your-github-org-or-username> \
       GitHubRepo=walk-up-songs \
-      WebsiteBucketName=<from step 2> \
-      CloudFrontDistributionId=<from step 2>
+      WebsiteBucketName=<from step 1> \
+      CloudFrontDistributionId=<from step 1>
 ```
 
-### 4. Wire up GitHub Actions
+### 3. Wire up GitHub Actions
 
 In **Settings → Secrets and variables → Actions**, add:
 
 | Secret | Value |
 |---|---|
-| `AWS_ROLE_ARN` | `RoleArn` output from step 3 |
-| `S3_BUCKET_NAME` | `WebsiteBucketName` from step 2 |
-| `CLOUDFRONT_DISTRIBUTION_ID` | `CloudFrontDistributionId` from step 2 |
+| `AWS_ROLE_ARN` | `RoleArn` output from step 2 |
+| `S3_BUCKET_NAME` | `WebsiteBucketName` from step 1 |
+| `CLOUDFRONT_DISTRIBUTION_ID` | `CloudFrontDistributionId` from step 1 |
 
 Any push to `main` that touches `index.html`, `sw.js`, or `manifest.json` will:
 

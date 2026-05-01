@@ -2,6 +2,7 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: >
   Walk-Up Songs — Core infrastructure.
   Creates:
+    - WAFv2 WebACL with IP rate limiting on the /api/* path
     - S3 website bucket (serves the single-page app)
     - S3 audio bucket  (stores zip exports; lifecycle to IA → Glacier IR)
     - CloudFront distribution with three origins:
@@ -10,11 +11,10 @@ Description: >
         3. /audio/*      → audio S3 bucket
     - Lambda function + Function URL for presigned URL generation
     - OAC for each S3 origin
-    - WAF WebACL attached (deployed from waf.yaml, passed as parameter)
 
-  NOTE: Deploy waf.yaml first (in us-east-1) then pass its output
-  WebACLArn to this stack as the WafAclArn parameter.
-  This stack can be deployed to any region; CloudFront is global.
+  IMPORTANT: This stack MUST be deployed to us-east-1. CloudFront-scoped
+  WAFv2 WebACLs are only supported in us-east-1, and CloudFront itself is
+  a global service managed out of us-east-1.
 
 Parameters:
 
@@ -28,18 +28,60 @@ Parameters:
       it can only be reached via CloudFront and not directly.
       Generate with: python3 -c "import uuid; print(uuid.uuid4())"
 
-  WafAclArn:
-    Type: String
-    Description: >
-      ARN of the WAFv2 WebACL created by waf.yaml (must be in us-east-1).
-      Found in the Outputs tab of the waf stack.
-
   ProjectTag:
     Type: String
     Default: walk-up-songs
     Description: Short identifier used to name and tag resources.
 
 Resources:
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # WAFv2 — WebACL with IP rate limiting on the /api/* path
+  # Scope: CLOUDFRONT — must live in us-east-1 (enforced by deploying this
+  # whole stack to us-east-1).
+  # ─────────────────────────────────────────────────────────────────────────
+
+  WebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub '${ProjectTag}-acl'
+      Scope: CLOUDFRONT
+      DefaultAction:
+        Allow: {}
+      Rules:
+        # Rate-limit the /api/* path to 100 requests per IP per 5 minutes.
+        # This is the WAFv2 minimum and protects against Lambda/S3 cost abuse.
+        - Name: ApiIPRateLimit
+          Priority: 0
+          Statement:
+            RateBasedStatement:
+              Limit: 100
+              AggregateKeyType: IP
+              EvaluationWindowSec: 300
+              # Only count requests that start with /api/ so static-asset
+              # traffic is not penalised.
+              ScopeDownStatement:
+                ByteMatchStatement:
+                  FieldToMatch:
+                    UriPath: {}
+                  PositionalConstraint: STARTS_WITH
+                  SearchString: /api/
+                  TextTransformations:
+                    - Priority: 0
+                      Type: NONE
+          Action:
+            Block: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub '${ProjectTag}-api-rate-limit'
+      VisibilityConfig:
+        SampledRequestsEnabled: false
+        CloudWatchMetricsEnabled: false
+        MetricName: !Sub '${ProjectTag}-web-acl'
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectTag
 
   # ─────────────────────────────────────────────────────────────────────────
   # S3 — Website bucket (app shell: index.html, sw.js, manifest.json)
@@ -313,7 +355,7 @@ Resources:
         DefaultRootObject: index.html
         HttpVersion: http2and3
         IPV6Enabled: true
-        WebACLId: !Ref WafAclArn
+        WebACLId: !GetAtt WebACL.Arn
 
         Origins:
           # Origin 1 — App shell (S3 website bucket, OAC)
