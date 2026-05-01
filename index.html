@@ -107,7 +107,9 @@
       transition: max-height 0.35s ease;
     }
 
-    #manage-panel.open { max-height: 500px; }
+    /* Large cap — must comfortably fit Add Player + Settings + Cloud Backup
+       cards so content doesn't get clipped behind the Roster below. */
+    #manage-panel.open { max-height: 1200px; }
 
     /* ── Main Layout ── */
     main {
@@ -607,17 +609,28 @@
       transform: translateX(-50%) translateY(0);
     }
 
-    /* ── Settings Row ── */
+    /* ── Settings Card ── */
+    /* Groups multiple settings rows together inside a single card so all
+       tunables (music duration, play-intro toggle, future additions) share
+       one container. */
+    .settings-card {
+      background: var(--navy2);
+      border: 1px solid #2a2a2a;
+      border-radius: var(--radius);
+      margin-bottom: 16px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
     .settings-row {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      background: var(--navy2);
-      border: 1px solid #2a2a2a;
-      border-radius: var(--radius);
       padding: 14px 18px;
-      margin-bottom: 16px;
-      box-shadow: var(--shadow);
+    }
+
+    .settings-row + .settings-row {
+      border-top: 1px solid #2a2a2a;
     }
 
     .settings-row label {
@@ -871,24 +884,26 @@
     </div>
 
     <!-- Settings -->
-    <div class="settings-row">
-      <div>
-        <label for="input-music-duration">Music Duration</label>
-        <div class="settings-hint">seconds per player</div>
+    <div class="settings-card">
+      <div class="settings-row">
+        <div>
+          <label for="input-music-duration">Music Duration</label>
+          <div class="settings-hint">seconds per player</div>
+        </div>
+        <input type="number" id="input-music-duration" class="settings-number-input"
+          min="1" max="60" step="1" inputmode="numeric" />
       </div>
-      <input type="number" id="input-music-duration" class="settings-number-input"
-        min="1" max="60" step="1" inputmode="numeric" />
-    </div>
 
-    <div class="settings-row">
-      <div>
-        <label for="toggle-play-intro">Play Intro</label>
-        <div class="settings-hint">announcer before music</div>
+      <div class="settings-row">
+        <div>
+          <label for="toggle-play-intro">Play Intro</label>
+          <div class="settings-hint">announcer before music</div>
+        </div>
+        <label class="settings-toggle" for="toggle-play-intro">
+          <input type="checkbox" id="toggle-play-intro" checked />
+          <span class="slider"></span>
+        </label>
       </div>
-      <label class="settings-toggle" for="toggle-play-intro">
-        <input type="checkbox" id="toggle-play-intro" checked />
-        <span class="slider"></span>
-      </label>
     </div>
 
     <!-- Cloud Backup -->
