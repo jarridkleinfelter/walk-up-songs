@@ -103,18 +103,28 @@ Resources:
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
+      # Versioning protects against accidental overwrite when a backup is
+      # saved under an existing name — prior versions remain recoverable.
+      VersioningConfiguration:
+        Status: Enabled
       LifecycleConfiguration:
         Rules:
           - Id: AudioExportTiering
             Status: Enabled
+            # Current (latest) version tiering
             Transitions:
-              - TransitionInDays: 30
-                StorageClass: STANDARD_IA
               - TransitionInDays: 90
                 StorageClass: GLACIER_IR
-            # Uncomment the following to automatically delete exports after
-            # 365 days and free up storage entirely:
-            # ExpirationInDays: 365
+            # Noncurrent (overwritten) versions are tiered for cost but
+            # NEVER auto-expire — they persist as long as the current
+            # version does. Deletion of all versions is handled manually
+            # (see README: "Permanently delete a backup").
+            NoncurrentVersionTransitions:
+              - TransitionInDays: 30
+                StorageClass: GLACIER_IR
+            # Clean up aborted multipart uploads so they don't accrue cost
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
       # CORS is required so the browser can PUT directly to S3 via presigned URL.
       # After the first deployment you can restrict AllowedOrigins to the exact
       # CloudFront domain (found in the Outputs tab of this stack).
