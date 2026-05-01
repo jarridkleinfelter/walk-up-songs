@@ -651,6 +651,53 @@
 
     .settings-number-input:focus { border-color: var(--gold); }
 
+    /* iOS-style toggle switch for boolean settings */
+    .settings-toggle {
+      position: relative;
+      width: 52px;
+      height: 30px;
+      flex-shrink: 0;
+    }
+
+    .settings-toggle input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+      position: absolute;
+    }
+
+    .settings-toggle .slider {
+      position: absolute;
+      inset: 0;
+      background: var(--navy3);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 30px;
+      cursor: pointer;
+      transition: background 0.2s, border-color 0.2s;
+    }
+
+    .settings-toggle .slider::before {
+      content: '';
+      position: absolute;
+      width: 22px;
+      height: 22px;
+      left: 3px;
+      top: 3px;
+      background: var(--white);
+      border-radius: 50%;
+      transition: transform 0.2s;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+    }
+
+    .settings-toggle input:checked + .slider {
+      background: var(--gold);
+      border-color: var(--gold);
+    }
+
+    .settings-toggle input:checked + .slider::before {
+      transform: translateX(22px);
+    }
+
     /* ── Cloud Backup Card ── */
     .cloud-card {
       background: var(--navy2);
@@ -711,8 +758,14 @@
 
     .cloud-select {
       flex: 1;
-      padding: 9px 10px;
-      background: var(--navy3);
+      padding: 9px 28px 9px 10px;
+      background-color: var(--navy3);
+      /* Chevron arrow so the dropdown reads as a select on iOS/Android where
+         -webkit-appearance:none strips the native indicator. */
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'><path d='M1 1l5 5 5-5' fill='none' stroke='%2300703C' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+      background-size: 12px 8px;
       border: 1px solid rgba(0,112,60,0.3);
       border-radius: 8px;
       color: var(--white);
@@ -793,7 +846,7 @@
     <span class="bolt">🥎</span>
   </div>
   <p class="subtitle">Walk-Up Songs</p>
-  <button id="btn-manage">⚙ Manage Roster</button>
+  <button id="btn-manage">⚙ Settings</button>
 </header>
 
 <main>
@@ -825,6 +878,17 @@
       </div>
       <input type="number" id="input-music-duration" class="settings-number-input"
         min="1" max="60" step="1" inputmode="numeric" />
+    </div>
+
+    <div class="settings-row">
+      <div>
+        <label for="toggle-play-intro">Play Intro</label>
+        <div class="settings-hint">announcer before music</div>
+      </div>
+      <label class="settings-toggle" for="toggle-play-intro">
+        <input type="checkbox" id="toggle-play-intro" checked />
+        <span class="slider"></span>
+      </label>
     </div>
 
     <!-- Cloud Backup -->
@@ -948,7 +1012,7 @@ function txGetAll(store) {
 //  Config — persisted to localStorage
 // ═══════════════════════════════════════════════════
 const CONFIG_KEY = 'walkup_config';
-const config = Object.assign({ musicDuration: 7 }, (() => {
+const config = Object.assign({ musicDuration: 7, playIntro: true }, (() => {
   try { return JSON.parse(localStorage.getItem(CONFIG_KEY)) || {}; } catch { return {}; }
 })());
 
@@ -965,6 +1029,15 @@ document.getElementById('input-music-duration').addEventListener('change', e => 
   saveConfig();
 });
 
+// Play-intro toggle — when off, handlePlay skips the announcer clip
+const introToggle = document.getElementById('toggle-play-intro');
+introToggle.checked = config.playIntro !== false;
+introToggle.addEventListener('change', e => {
+  config.playIntro = e.target.checked;
+  saveConfig();
+  renderPlayers();
+});
+
 // ═══════════════════════════════════════════════════
 //  Manage panel toggle
 // ═══════════════════════════════════════════════════
@@ -973,7 +1046,7 @@ document.getElementById('btn-manage').addEventListener('click', () => {
   const btn   = document.getElementById('btn-manage');
   const open  = panel.classList.toggle('open');
   btn.classList.toggle('open', open);
-  btn.textContent = open ? '✕ Close' : '⚙ Manage Roster';
+  btn.textContent = open ? '✕ Close' : '⚙ Settings';
 });
 
 // ═══════════════════════════════════════════════════
@@ -1085,8 +1158,10 @@ function renderPlayers() {
     const isPlaying = p.id === currentPlayerId;
     const hasAnnouncer = !!p.announcerKey;
     const hasMusic     = !!p.musicKey;
-    const isReady      = hasAnnouncer && hasMusic;
-    const isPartial    = hasAnnouncer !== hasMusic;
+    const announcerRequired = config.playIntro !== false;
+    const isReady      = hasMusic && (!announcerRequired || hasAnnouncer);
+    const missingAnnouncer = announcerRequired && hasAnnouncer === false && hasMusic;
+    const missingMusic     = hasMusic === false && hasAnnouncer;
 
     let statusText = '';
     let statusClass = '';
@@ -1096,8 +1171,11 @@ function renderPlayers() {
     } else if (isReady) {
       statusText = '✓ Ready to play';
       statusClass = 'ready';
-    } else if (isPartial) {
-      statusText = '⚠ Missing ' + (!hasAnnouncer ? 'announcer' : 'music');
+    } else if (missingAnnouncer) {
+      statusText = '⚠ Missing announcer';
+      statusClass = 'partial';
+    } else if (missingMusic) {
+      statusText = '⚠ Missing music';
       statusClass = 'partial';
     } else {
       statusText = 'Tap below to add audio';
@@ -1353,15 +1431,17 @@ async function handlePlay(id) {
   stopAll();
 
   const p = players.find(x => x.id === id);
-  if (!p || !p.announcerKey || !p.musicKey) return;
+  if (!p || !p.musicKey) return;
+  if (config.playIntro && !p.announcerKey) return;
 
   currentPlayerId = id;
   renderPlayers();
-  updateNowPlayingBar(p.name, 'Intro…');
 
-  // Play announcer (full), then music clip (startTime → +7 s)
-  await playBlob(p.announcerKey, { deepenVoice: true, volume: 1.5 });
-  if (currentPlayerId !== id) return;   // stopped mid-way
+  if (config.playIntro && p.announcerKey) {
+    updateNowPlayingBar(p.name, 'Intro…');
+    await playBlob(p.announcerKey, { deepenVoice: true, volume: 1.5 });
+    if (currentPlayerId !== id) return;
+  }
 
   updateNowPlayingBar(p.name, '🎵 Walk-up Song');
   await playBlob(p.musicKey, { startTime: p.musicStart || 0, clipDuration: config.musicDuration });
@@ -1575,6 +1655,40 @@ async function loadBackupList() {
   }
 }
 
+// XHR-based PUT so we can show upload progress (fetch doesn't expose it).
+function putWithProgress(url, blob, contentType, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', url);
+    xhr.setRequestHeader('Content-Type', contentType);
+    xhr.upload.addEventListener('progress', e => {
+      if (e.lengthComputable) onProgress(e.loaded / e.total);
+    });
+    xhr.onload = () => xhr.status >= 200 && xhr.status < 300
+      ? resolve()
+      : reject(new Error(`HTTP ${xhr.status}`));
+    xhr.onerror = () => reject(new Error('Network error'));
+    xhr.send(blob);
+  });
+}
+
+// XHR-based GET so we can show download progress.
+function getBlobWithProgress(url, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET', url);
+    xhr.responseType = 'blob';
+    xhr.addEventListener('progress', e => {
+      if (e.lengthComputable) onProgress(e.loaded / e.total);
+    });
+    xhr.onload = () => xhr.status >= 200 && xhr.status < 300
+      ? resolve(xhr.response)
+      : reject(new Error(`HTTP ${xhr.status}`));
+    xhr.onerror = () => reject(new Error('Network error'));
+    xhr.send();
+  });
+}
+
 async function exportData() {
   if (players.length === 0) { showToast('No roster to export'); return; }
 
@@ -1586,6 +1700,8 @@ async function exportData() {
 
   const btn = document.getElementById('btn-cloud-export');
   btn.disabled = true;
+  const origLabel = btn.textContent;
+  btn.textContent = 'Preparing…';
   showToast('Preparing backup…');
 
   try {
@@ -1604,18 +1720,15 @@ async function exportData() {
     const zipBlob = await zip.generateAsync({ type: 'blob' });
 
     // 2. Get a presigned PUT URL from the Lambda
-    showToast('Uploading to cloud…');
     const presignRes = await fetch(`/api/presign/upload?filename=${encodeURIComponent(filename)}`);
     if (!presignRes.ok) throw new Error(`Presign HTTP ${presignRes.status}`);
     const { url: putUrl, filename: finalFilename } = await presignRes.json();
 
-    // 3. PUT the zip directly to S3
-    const uploadRes = await fetch(putUrl, {
-      method: 'PUT',
-      body: zipBlob,
-      headers: { 'Content-Type': 'application/zip' },
+    // 3. PUT the zip directly to S3 with progress
+    btn.textContent = 'Uploading 0%';
+    await putWithProgress(putUrl, zipBlob, 'application/zip', frac => {
+      btn.textContent = `Uploading ${Math.round(frac * 100)}%`;
     });
-    if (!uploadRes.ok) throw new Error(`S3 upload HTTP ${uploadRes.status}`);
 
     nameInput.value = '';
     showToast(`Saved "${finalFilename}" ✓`);
@@ -1624,6 +1737,7 @@ async function exportData() {
     console.error('Export error:', err);
     showToast('Backup failed — check connection');
   } finally {
+    btn.textContent = origLabel;
     btn.disabled = false;
   }
 }
@@ -1637,7 +1751,7 @@ async function importData() {
 
   const btn = document.getElementById('btn-cloud-import');
   btn.disabled = true;
-  showToast('Downloading backup…');
+  const origLabel = btn.textContent;
 
   try {
     // 1. Get a presigned GET URL from the Lambda
@@ -1645,10 +1759,13 @@ async function importData() {
     if (!presignRes.ok) throw new Error(`Presign HTTP ${presignRes.status}`);
     const { url: getUrl } = await presignRes.json();
 
-    // 2. Download the zip directly from S3
-    const dlRes = await fetch(getUrl);
-    if (!dlRes.ok) throw new Error(`S3 download HTTP ${dlRes.status}`);
-    const zipBlob = await dlRes.blob();
+    // 2. Download the zip directly from S3 with progress
+    btn.textContent = 'Downloading 0%';
+    const zipBlob = await getBlobWithProgress(getUrl, frac => {
+      btn.textContent = `Downloading ${Math.round(frac * 100)}%`;
+    });
+
+    btn.textContent = 'Restoring…';
 
     // 3. Restore from zip
     const zip = await JSZip.loadAsync(zipBlob);
@@ -1686,6 +1803,7 @@ async function importData() {
     console.error('Import error:', err);
     showToast('Import failed — check connection');
   } finally {
+    btn.textContent = origLabel;
     btn.disabled = false;
   }
 }
