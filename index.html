@@ -1,6 +1,16 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-L76T6WDQ8L"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', 'G-L76T6WDQ8L');
+  </script>
+
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -1449,6 +1459,11 @@ async function handlePlay(id) {
   if (!p || !p.musicKey) return;
   if (config.playIntro && !p.announcerKey) return;
 
+  // Resume synchronously while still in the user-gesture call stack.
+  // iOS Safari only permits AudioContext.resume() and audio.play() from
+  // a direct gesture — once we await anything this window closes.
+  getAudioCtx().resume();
+
   currentPlayerId = id;
   renderPlayers();
 
@@ -1524,7 +1539,15 @@ function playBlob(key, { startTime = 0, clipDuration = null, deepenVoice = false
       try {
         await ctx.resume();
         await audio.play();
-      } catch { cleanup(); return; }
+      } catch (err) {
+        console.error('Playback error:', err);
+        if (err && err.name === 'NotAllowedError') {
+          showToast('Tap the screen first to unlock audio');
+        } else {
+          showToast('Playback failed — tap to try again');
+        }
+        cleanup(); return;
+      }
 
       if (clipDuration !== null) {
         currentClipTimer = setTimeout(() => {
@@ -1822,6 +1845,16 @@ async function importData() {
     btn.disabled = false;
   }
 }
+
+// ═══════════════════════════════════════════════════
+//  iOS AudioContext unlock — resume on first tap so
+//  the context is in 'running' state before playback
+// ═══════════════════════════════════════════════════
+document.addEventListener('touchend', function unlock() {
+  const ctx = getAudioCtx();
+  if (ctx.state !== 'running') ctx.resume();
+  document.removeEventListener('touchend', unlock);
+}, { once: true, passive: true });
 
 // ═══════════════════════════════════════════════════
 //  Init — load persisted players
