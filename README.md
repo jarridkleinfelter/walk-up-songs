@@ -193,6 +193,7 @@ aws cloudformation deploy \
   --stack-name walk-up-songs-ghrole \
   --template-file iac/ghrole.yaml \
   --region us-east-1 \
+  --profile web \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameter-overrides \
       GitHubOrg=<your-github-org-or-username> \
