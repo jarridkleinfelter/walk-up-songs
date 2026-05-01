@@ -51,6 +51,9 @@ Resources:
         SampledRequestsEnabled: false
         CloudWatchMetricsEnabled: false
         MetricName: !Sub '${ProjectTag}-web-acl'
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectTag
 
 Outputs:
   WebACLArn:
