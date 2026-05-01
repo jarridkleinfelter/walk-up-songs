@@ -40,17 +40,19 @@ Resources:
   # If you already have a GitHub OIDC provider in this account
   # (e.g. from another project), remove this resource and point
   # the role's trust policy at the existing one.
-  GitHubOIDCProvider:
-    Type: AWS::IAM::OIDCProvider
-    Properties:
-      Url: https://token.actions.githubusercontent.com
-      ClientIdList:
-        - sts.amazonaws.com
-      ThumbprintList:
-        - 6938fd4d98bab03faadb97b34396831e3780aea1
-      Tags:
-        - Key: Project
-          Value: !Ref ProjectTag
+
+  ## Using the existing Github OIDC Provider in my account ##
+  # GitHubOIDCProvider:
+  #   Type: AWS::IAM::OIDCProvider
+  #   Properties:
+  #     Url: https://token.actions.githubusercontent.com
+  #     ClientIdList:
+  #       - sts.amazonaws.com
+  #     ThumbprintList:
+  #       - 6938fd4d98bab03faadb97b34396831e3780aea1
+  #     Tags:
+  #       - Key: Project
+  #         Value: !Ref ProjectTag
 
   GitHubActionsRole:
     Type: AWS::IAM::Role
@@ -61,7 +63,7 @@ Resources:
         Statement:
           - Effect: Allow
             Principal:
-              Federated: !Ref GitHubOIDCProvider
+              Federated: arn:aws:iam::553444109991:oidc-provider/token.actions.githubusercontent.com
             Action: sts:AssumeRoleWithWebIdentity
             Condition:
               StringEquals:
