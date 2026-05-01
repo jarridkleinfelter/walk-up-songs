@@ -1,0 +1,83 @@
+name: Deploy Walk-Up Songs
+
+on:
+  push:
+    branches:
+      - main
+    # Only run when the app shell or service worker changes.
+    paths:
+      - 'index.html'
+      - 'manifest.json'
+      - 'sw.js'
+
+permissions:
+  id-token:  write   # required for OIDC token exchange
+  contents:  read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  deploy:
+    name: Sync to S3 and invalidate CloudFront
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1   # region where the website bucket lives
+
+      # Stamp the service worker cache name with the UTC deploy timestamp.
+      # This forces browsers that have an older cached sw.js to detect the
+      # new worker, re-fetch all assets, and switch to the updated app.
+      # The modification is made in the CI runner only — it is NOT committed
+      # back to the repository.
+      - name: Stamp service worker cache version
+        run: |
+          TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ)
+          sed -i "s/const CACHE = 'walkup-[^']*'/const CACHE = 'walkup-${TIMESTAMP}'/" sw.js
+          echo "Cache version set to: walkup-${TIMESTAMP}"
+
+      # Sync all three app-shell files to S3.
+      # --delete removes any files from the bucket that no longer exist locally.
+      # Cache-Control values:
+      #   index.html  — no-cache so browsers always revalidate (picks up SW updates)
+      #   sw.js       — no-cache; service workers must never be cached by the browser
+      #   manifest.json — short cache, rarely changes
+      - name: Upload index.html (no-cache)
+        run: |
+          aws s3 cp index.html s3://${{ secrets.S3_BUCKET_NAME }}/index.html \
+            --cache-control "no-cache, no-store, must-revalidate" \
+            --content-type "text/html; charset=utf-8"
+
+      - name: Upload sw.js (no-cache)
+        run: |
+          aws s3 cp sw.js s3://${{ secrets.S3_BUCKET_NAME }}/sw.js \
+            --cache-control "no-cache, no-store, must-revalidate" \
+            --content-type "application/javascript"
+
+      - name: Upload manifest.json
+        run: |
+          aws s3 cp manifest.json s3://${{ secrets.S3_BUCKET_NAME }}/manifest.json \
+            --cache-control "max-age=3600" \
+            --content-type "application/manifest+json"
+
+      # Invalidate the CloudFront cache so the updated files are served
+      # immediately to all users worldwide.
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/*"
+
+# ─── Required GitHub Secrets ───────────────────────────────────────────────
+# Set these in: Settings → Secrets and variables → Actions → New repository secret
+#
+#   AWS_ROLE_ARN              ARN output from the ghrole.yaml CloudFormation stack
+#   S3_BUCKET_NAME            WebsiteBucketName output from main.yaml
+#   CLOUDFRONT_DISTRIBUTION_ID  CloudFrontDistributionId output from main.yaml
