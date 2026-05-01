@@ -156,6 +156,7 @@ aws cloudformation deploy \
   --stack-name walk-up-songs-main \
   --template-file iac/main.yaml \
   --region us-east-1 \
+  --profile web \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameter-overrides \
       CloudFrontSecret=$SECRET
@@ -196,10 +197,10 @@ aws cloudformation deploy \
   --profile web \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameter-overrides \
-      GitHubOrg=<your-github-org-or-username> \
+      GitHubOrg=$GITHUB_ORG \
       GitHubRepo=walk-up-songs \
-      WebsiteBucketName=<from step 1> \
-      CloudFrontDistributionId=<from step 1>
+      WebsiteBucketName=$WEB_BUCKET \
+      CloudFrontDistributionId=$CF_DIST
 ```
 
 ### 4. Wire up GitHub Actions
