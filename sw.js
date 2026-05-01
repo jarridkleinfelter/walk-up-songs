@@ -22,6 +22,11 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
+  // Never intercept API calls — they must always go to the network so the
+  // Lambda sees the request and fresh presigned URLs are returned.
+  const url = new URL(e.request.url);
+  if (url.pathname.startsWith('/api/')) return;
+
   e.respondWith(
     caches.match(e.request).then(cached => cached || fetch(e.request))
   );

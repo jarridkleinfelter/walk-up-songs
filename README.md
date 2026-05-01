@@ -141,7 +141,7 @@ No build system, no npm, no dependencies to install for the app itself. Everythi
 
 ## Deploying to AWS
 
-Deploy the two CloudFormation stacks in order. All commands assume the AWS CLI is configured with an admin-level profile. **Both stacks must be deployed to `us-east-1`** — CloudFront-scoped WAFv2 ACLs only exist there, and the stack co-locates the WebACL with the distribution.
+Deploy the two CloudFormation stacks in order, then perform two manual console steps. All commands assume the AWS CLI is configured with an admin-level profile. **Both stacks must be deployed to `us-east-1`** — CloudFront-scoped WAFv2 ACLs only exist there, and the stack co-locates the WebACL with the distribution.
 
 ### 1. Main stack (us-east-1)
 
@@ -163,7 +163,30 @@ aws cloudformation deploy \
 
 Copy the `WebsiteBucketName`, `CloudFrontDistributionId`, and `CloudFrontURL` outputs.
 
-### 2. GitHub Actions role
+### 2. Manual console steps (post-deploy)
+
+Two console actions cannot be expressed in CloudFormation and must be done by hand after the main stack finishes deploying:
+
+**a. Switch the CloudFront distribution to the Free flat-rate pricing plan.**
+
+1. Open the CloudFront console → **Distributions** → select the `walk-up-songs` distribution.
+2. Open the **Pricing plans** (or **Change pricing plan**) action.
+3. Choose **Free** → confirm.
+
+This swaps the per-WebACL/per-rule billing (~$6/month) for the bundled Free-tier allotment (100 GB transfer, 1 M requests, up to 5 WAF rules — well above this app's footprint).
+
+**b. Re-save the Lambda Function URL policy.**
+
+There is an AWS bug where the `AWS::Lambda::Permission` declared by the stack reports success but the resource-based policy statement is not actually attached to the function. Symptom: requests to `/api/presign/*` return 403 from CloudFront. Fix:
+
+1. Open the Lambda console → functions → `walk-up-songs-presign`.
+2. Go to the **Configuration** tab → **Function URL**.
+3. Click **Edit**.
+4. Review the policy (no changes needed) and click **Save**.
+
+This one console save causes Lambda to correctly attach the `lambda:InvokeFunctionUrl` statement with `Principal: *` to the function's policy. Only required once per stack creation — subsequent `aws cloudformation deploy` runs do not undo it.
+
+### 3. GitHub Actions role
 
 ```bash
 aws cloudformation deploy \
@@ -178,13 +201,13 @@ aws cloudformation deploy \
       CloudFrontDistributionId=<from step 1>
 ```
 
-### 3. Wire up GitHub Actions
+### 4. Wire up GitHub Actions
 
 In **Settings → Secrets and variables → Actions**, add:
 
 | Secret | Value |
 |---|---|
-| `AWS_ROLE_ARN` | `RoleArn` output from step 2 |
+| `AWS_ROLE_ARN` | `RoleArn` output from step 3 |
 | `S3_BUCKET_NAME` | `WebsiteBucketName` from step 1 |
 | `CLOUDFRONT_DISTRIBUTION_ID` | `CloudFrontDistributionId` from step 1 |
 

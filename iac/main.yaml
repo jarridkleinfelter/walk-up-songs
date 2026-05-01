@@ -49,32 +49,25 @@ Resources:
       DefaultAction:
         Allow: {}
       Rules:
-        # Rate-limit the /api/* path to 100 requests per IP per 5 minutes.
-        # This is the WAFv2 minimum and protects against Lambda/S3 cost abuse.
-        - Name: ApiIPRateLimit
+        # Rate-limit to 100 requests per IP per 5 minutes (WAFv2 minimum).
+        # Protects Lambda/S3 cost surface. Applies to the whole distribution —
+        # a ScopeDownStatement with ByteMatch would be more precise, but the
+        # CloudFront Free-tier pricing plan rejects custom pattern-matching
+        # constructs. Static-asset traffic is nowhere near 100/IP/5min at
+        # this app's scale, so the broader scope is harmless.
+        - Name: IPRateLimit
           Priority: 0
           Statement:
             RateBasedStatement:
               Limit: 100
               AggregateKeyType: IP
               EvaluationWindowSec: 300
-              # Only count requests that start with /api/ so static-asset
-              # traffic is not penalised.
-              ScopeDownStatement:
-                ByteMatchStatement:
-                  FieldToMatch:
-                    UriPath: {}
-                  PositionalConstraint: STARTS_WITH
-                  SearchString: /api/
-                  TextTransformations:
-                    - Priority: 0
-                      Type: NONE
           Action:
             Block: {}
           VisibilityConfig:
             SampledRequestsEnabled: true
             CloudWatchMetricsEnabled: true
-            MetricName: !Sub '${ProjectTag}-api-rate-limit'
+            MetricName: !Sub '${ProjectTag}-rate-limit'
       VisibilityConfig:
         SampledRequestsEnabled: false
         CloudWatchMetricsEnabled: false
@@ -175,7 +168,6 @@ Resources:
           - AllowedHeaders: ['*']
             AllowedMethods: [GET, PUT]
             AllowedOrigins: ['*']
-            MaxAgeSeconds: 3600
       Tags:
         - Key: Project
           Value: !Ref ProjectTag
@@ -323,17 +315,21 @@ Resources:
       # (/api/*) not the Function URL directly. Configured for dev convenience.
       Cors:
         AllowOrigins: ['*']
-        AllowMethods: [GET, OPTIONS]
+        AllowMethods: [GET]
         AllowHeaders: ['*']
         MaxAge: 300
       TargetFunctionArn: !GetAtt PresignFunction.Arn
 
   # Allow unauthenticated invocations via the Function URL
   # (the X-CloudFront-Secret header provides the actual security layer).
+  # NOTE: FunctionName must be a name (!Ref), not an ARN (!GetAtt .Arn).
+  # The ARN form is documented as accepted but in practice the resource-
+  # based policy statement does not reliably attach to the function.
   PresignFunctionUrlPermission:
     Type: AWS::Lambda::Permission
+    DependsOn: PresignFunctionUrl
     Properties:
-      FunctionName: !GetAtt PresignFunction.Arn
+      FunctionName: !Ref PresignFunction
       Action: lambda:InvokeFunctionUrl
       Principal: '*'
       FunctionUrlAuthType: NONE
@@ -419,12 +415,11 @@ Resources:
           CachedMethods: [GET, HEAD]
           Compress: true
 
-        # Return index.html on 403/404 (SPA routing + S3 access-denied fallback)
+        # Return index.html on 404 (SPA routing fallback).
+        # 403 is deliberately NOT rewritten — the Lambda uses 403 to signal
+        # "missing/invalid X-CloudFront-Secret", and rewriting it to HTML
+        # would mask genuine API auth failures as silent 200s.
         CustomErrorResponses:
-          - ErrorCode: 403
-            ResponseCode: 200
-            ResponsePagePath: /index.html
-            ErrorCachingMinTTL: 10
           - ErrorCode: 404
             ResponseCode: 200
             ResponsePagePath: /index.html
