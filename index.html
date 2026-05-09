@@ -41,6 +41,39 @@
       --shadow: 0 4px 24px rgba(0,0,0,0.6);
     }
 
+    [data-theme="light"] {
+      --navy:   #f0f2f5;
+      --navy2:  #ffffff;
+      --navy3:  #e8eaed;
+      --white:  #111111;
+      --gray:   #555555;
+      --gray2:  #333333;
+      --shadow: 0 4px 24px rgba(0,0,0,0.10);
+    }
+
+    [data-theme="light"] header {
+      background: #ffffff;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+
+    [data-theme="light"] #now-playing-bar {
+      box-shadow: 0 -2px 12px rgba(0,0,0,0.12);
+    }
+
+    [data-theme="light"] #toast {
+      background: rgba(255,255,255,0.97);
+      color: #111111;
+      border-color: var(--gold);
+    }
+
+    [data-theme="light"] .player-card.last-played {
+      border-color: rgba(0,112,60,0.5);
+    }
+
+    [data-theme="light"] .audio-file-btn {
+      border-color: rgba(0,112,60,0.4);
+    }
+
     html, body {
       height: 100%;
       background: var(--navy);
@@ -230,6 +263,11 @@
     .player-card.playing {
       border-color: var(--gold);
       box-shadow: 0 0 0 2px rgba(0,112,60,0.3), var(--shadow);
+    }
+
+    .player-card.last-played {
+      border-color: rgba(0,112,60,0.45);
+      box-shadow: 0 0 0 1px rgba(0,112,60,0.15), var(--shadow);
     }
 
     .player-card.sortable-ghost { opacity: 0.35; }
@@ -914,6 +952,17 @@
           <span class="slider"></span>
         </label>
       </div>
+
+      <div class="settings-row">
+        <div>
+          <label for="toggle-theme">Light Mode</label>
+          <div class="settings-hint">switch display theme</div>
+        </div>
+        <label class="settings-toggle" for="toggle-theme">
+          <input type="checkbox" id="toggle-theme" />
+          <span class="slider"></span>
+        </label>
+      </div>
     </div>
 
     <!-- Cloud Backup -->
@@ -1036,7 +1085,7 @@ function txGetAll(store) {
 //  Config — persisted to localStorage
 // ═══════════════════════════════════════════════════
 const CONFIG_KEY = 'walkup_config';
-const config = Object.assign({ musicDuration: 7, playIntro: true }, (() => {
+const config = Object.assign({ musicDuration: 7, playIntro: true, theme: 'dark' }, (() => {
   try { return JSON.parse(localStorage.getItem(CONFIG_KEY)) || {}; } catch { return {}; }
 })());
 
@@ -1051,6 +1100,20 @@ document.getElementById('input-music-duration').addEventListener('change', e => 
   e.target.value  = val;
   config.musicDuration = val;
   saveConfig();
+});
+
+// Theme — applied immediately and on toggle
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+}
+applyTheme(config.theme);
+
+const themeToggle = document.getElementById('toggle-theme');
+themeToggle.checked = config.theme === 'light';
+themeToggle.addEventListener('change', e => {
+  config.theme = e.target.checked ? 'light' : 'dark';
+  saveConfig();
+  applyTheme(config.theme);
 });
 
 // Play-intro toggle — when off, handlePlay skips the announcer clip
@@ -1079,6 +1142,7 @@ document.getElementById('btn-manage').addEventListener('click', () => {
 let players = [];         // [{id, number, name, announcerKey, musicKey, announcerName, musicName, musicStart}]
 let currentAudio = null;  // currently playing Audio object
 let currentPlayerId = null;
+let lastPlayedId = null;  // retains highlight after playback ends
 let progressInterval = null;
 let currentClipTimer = null;
 let editingPlayerId = null;
@@ -1210,7 +1274,7 @@ function renderPlayers() {
     const isEditing = p.id === editingPlayerId;
 
     return `
-    <div class="player-card${isPlaying ? ' playing' : ''}" data-id="${p.id}">
+    <div class="player-card${isPlaying ? ' playing' : (p.id === lastPlayedId ? ' last-played' : '')}" data-id="${p.id}">
       <div class="player-header${isEditing ? ' edit-mode' : ''}">
         ${isEditing ? `
         <div class="edit-fields">
@@ -1269,7 +1333,6 @@ function renderPlayers() {
               value="${formatTime(p.musicStart || 0)}"
               onblur="saveMusicStart('${p.id}', this.value)"
               onkeydown="if(event.key==='Enter'){this.blur();}" />
-            <span class="music-start-hint">plays for ${config.musicDuration} sec</span>
           </div>
         </div>` : ''}
       </div>
@@ -1463,12 +1526,13 @@ async function handlePlay(id) {
   // a direct gesture — once we await anything this window closes.
   getAudioCtx().resume();
 
+  lastPlayedId = id;
   currentPlayerId = id;
   renderPlayers();
 
   if (config.playIntro && p.announcerKey) {
     updateNowPlayingBar(p.name, 'Intro…');
-    await playBlob(p.announcerKey, { deepenVoice: true, volume: 1.5 });
+    await playBlob(p.announcerKey, { deepenVoice: true, volume: 2.0 });
     if (currentPlayerId !== id) return;
   }
 
@@ -1748,7 +1812,10 @@ async function exportData() {
         }
       }
     }
-    const zipBlob = await zip.generateAsync({ type: 'blob' });
+    btn.textContent = 'Compressing 0%';
+    const zipBlob = await zip.generateAsync({ type: 'blob' }, meta => {
+      btn.textContent = `Compressing ${Math.round(meta.percent)}%`;
+    });
 
     // 2. Get a presigned PUT URL from the Lambda
     const presignRes = await fetch(`/api/presign/upload?filename=${encodeURIComponent(filename)}`);
