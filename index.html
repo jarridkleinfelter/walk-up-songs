@@ -74,6 +74,15 @@
       border-color: rgba(0,112,60,0.4);
     }
 
+    /* Elements with green backgrounds must keep white text in light mode */
+    [data-theme="light"] .player-number,
+    [data-theme="light"] .btn-play,
+    [data-theme="light"] .btn-add,
+    [data-theme="light"] .btn-secondary,
+    [data-theme="light"] .btn-save-edit {
+      color: #ffffff;
+    }
+
     html, body {
       height: 100%;
       background: var(--navy);
