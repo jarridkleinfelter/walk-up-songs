@@ -1759,19 +1759,53 @@ async function loadBackupList() {
   }
 }
 
-// XHR-based PUT so we can show upload progress (fetch doesn't expose it).
+// XHR-based PUT with simulated progress.
+// Cross-origin S3 presigned PUTs don't reliably fire XHR upload.progress
+// events. setInterval is also throttled on iOS Safari PWA, so we use
+// requestAnimationFrame (never throttled while the screen is visible) with
+// a timestamp gate to update every ~200 ms. Real upload.progress events
+// override the simulation if the browser fires them.
 function putWithProgress(url, blob, contentType, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('PUT', url);
     xhr.setRequestHeader('Content-Type', contentType);
+
+    let done = false;
+    let usedRealProgress = false;
+    let simPct = 0;
+    let lastTick = 0;
+
+    function tick(ts) {
+      if (done) return;
+      if (ts - lastTick >= 200) {
+        lastTick = ts;
+        if (!usedRealProgress) {
+          simPct = simPct + (89 - simPct) * 0.18;
+          onProgress(simPct / 100);
+        }
+      }
+      requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+
     xhr.upload.addEventListener('progress', e => {
-      if (e.lengthComputable) onProgress(e.loaded / e.total);
+      if (e.lengthComputable) {
+        usedRealProgress = true;
+        onProgress(e.loaded / e.total);
+      }
     });
-    xhr.onload = () => xhr.status >= 200 && xhr.status < 300
-      ? resolve()
-      : reject(new Error(`HTTP ${xhr.status}`));
-    xhr.onerror = () => reject(new Error('Network error'));
+
+    xhr.onload = () => {
+      done = true;
+      onProgress(1);
+      setTimeout(() => {
+        xhr.status >= 200 && xhr.status < 300
+          ? resolve()
+          : reject(new Error(`HTTP ${xhr.status}`));
+      }, 200);
+    };
+    xhr.onerror = () => { done = true; reject(new Error('Network error')); };
     xhr.send(blob);
   });
 }
@@ -1821,10 +1855,7 @@ async function exportData() {
         }
       }
     }
-    btn.textContent = 'Compressing 0%';
-    const zipBlob = await zip.generateAsync({ type: 'blob' }, meta => {
-      btn.textContent = `Compressing ${Math.round(meta.percent)}%`;
-    });
+    const zipBlob = await zip.generateAsync({ type: 'blob' });
 
     // 2. Get a presigned PUT URL from the Lambda
     const presignRes = await fetch(`/api/presign/upload?filename=${encodeURIComponent(filename)}`);
